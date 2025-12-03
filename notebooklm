@@ -1,0 +1,906 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken,
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  serverTimestamp 
+} from 'firebase/firestore';
+import { 
+  Search, 
+  Plus, 
+  BookOpen, 
+  Filter, 
+  X, 
+  ExternalLink, 
+  User, 
+  Tag, 
+  ChevronDown, 
+  Loader2,
+  Send,
+  Trash2,
+  Building,
+  Mail,
+  CheckCircle,
+  AlertCircle,
+  Briefcase,
+  ShieldCheck,
+  Moon,
+  Sun,
+  MessageSquare,
+  FileText // Added for reviewer note icon
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- Categories Data ---
+const CATEGORY_DATA = {
+  "Education & Study": [
+    "Lecture Notes",
+    "Textbook Summaries",
+    "Language Learning",
+    "History",
+    "Science & STEM",
+    "Literature"
+  ],
+  "Creative Work": [
+    "Writing Prompts",
+    "World Building",
+    "Character Bios",
+    "Screenwriting",
+    "Poetry"
+  ],
+  "Productivity": [
+    "Meeting Minutes",
+    "Project Planning",
+    "SOPs & Manuals",
+    "Brainstorming",
+    "Personal Journaling"
+  ],
+  "Research": [
+    "Academic Papers",
+    "Market Research",
+    "Legal Analysis",
+    "Medical/Health",
+    "Technical Documentation"
+  ],
+  "Lifestyle": [
+    "Recipes & Cooking",
+    "Travel Planning",
+    "Fitness & Health",
+    "Finance",
+    "Hobbies"
+  ],
+  "Other": [
+    "General",
+    "Miscellaneous",
+    "Uncategorized",
+    "Archive"
+  ]
+};
+
+const MAIN_CATEGORIES = Object.keys(CATEGORY_DATA);
+
+// --- Components ---
+
+const NotebookCard = ({ notebook, isDark }) => (
+  <div className={`rounded-xl border shadow-sm hover:shadow-md transition-all duration-200 flex flex-col h-full overflow-hidden group ${
+    isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+  }`}>
+    <div className="p-5 flex-grow">
+      <div className="flex justify-between items-start mb-3">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+          isDark ? 'bg-blue-900/30 text-blue-300' : 'bg-blue-50 text-blue-700'
+        }`}>
+          {notebook.mainCategory}
+        </span>
+        <div className="flex flex-col items-end">
+           <span className={`text-xs flex items-center gap-1 ${isDark ? 'text-slate-400' : 'text-slate-400'}`}>
+            <User size={12} />
+            {notebook.owner || 'Anonymous'}
+          </span>
+          {notebook.organization && (
+            <span className={`text-[10px] flex items-center gap-1 mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              <Building size={10} />
+              {notebook.organization}
+            </span>
+          )}
+        </div>
+      </div>
+      
+      <h3 className={`text-lg font-bold mb-2 leading-tight group-hover:text-blue-500 transition-colors ${
+        isDark ? 'text-slate-100' : 'text-slate-800'
+      }`}>
+        {notebook.title}
+      </h3>
+      
+      <p className={`text-sm line-clamp-3 mb-4 ${
+        isDark ? 'text-slate-400' : 'text-slate-600'
+      }`}>
+        {notebook.description}
+      </p>
+
+      <div className="flex flex-wrap gap-2 mt-auto">
+        <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded ${
+          isDark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-500'
+        }`}>
+          <Tag size={10} />
+          {notebook.subCategory}
+        </span>
+      </div>
+    </div>
+    
+    <div className={`px-5 py-3 border-t flex justify-between items-center ${
+      isDark ? 'bg-slate-900/30 border-slate-700' : 'bg-slate-50 border-slate-100'
+    }`}>
+      <span className={`text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+        {notebook.createdAt?.toDate().toLocaleDateString() || 'Recently'}
+      </span>
+      <a 
+        href={notebook.url} 
+        target="_blank" 
+        rel="noopener noreferrer"
+        className={`text-sm font-medium flex items-center gap-1 ${
+          isDark ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'
+        }`}
+      >
+        Open Notebook <ExternalLink size={14} />
+      </a>
+    </div>
+  </div>
+);
+
+const ContactForm = ({ onCancel, isDark, onSubmit }) => {
+  const [formData, setFormData] = useState({ name: '', email: '', message: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  
+  // Captcha State
+  const [captcha, setCaptcha] = useState({ 
+    num1: Math.floor(Math.random() * 10) + 1, 
+    num2: Math.floor(Math.random() * 10) + 1 
+  });
+  const [captchaAnswer, setCaptchaAnswer] = useState('');
+  const [errors, setErrors] = useState({});
+
+  const inputClass = `w-full px-4 py-2 rounded-lg border focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none ${
+    isDark 
+      ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' 
+      : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400'
+  }`;
+  
+  const labelClass = `block text-sm font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Validate Captcha
+    if (parseInt(captchaAnswer) !== captcha.num1 + captcha.num2) {
+      setErrors({ captcha: "Incorrect answer. Please try again." });
+      return;
+    }
+
+    setIsSubmitting(true);
+    await onSubmit(formData);
+    setIsSubmitting(false);
+    setIsSuccess(true);
+  };
+
+  if (isSuccess) {
+    return (
+      <div className={`max-w-xl mx-auto rounded-2xl shadow-xl border overflow-hidden animate-in fade-in zoom-in duration-300 p-12 text-center ${
+        isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+      }`}>
+        <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 ${
+          isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-600'
+        }`}>
+          <Mail size={32} />
+        </div>
+        <h2 className={`text-2xl font-bold mb-4 ${isDark ? 'text-white' : 'text-slate-800'}`}>Message Sent!</h2>
+        <p className={`text-lg mb-8 max-w-md mx-auto ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+          Thanks for reaching out. We'll get back to you as soon as possible.
+        </p>
+        <button
+          onClick={onCancel}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors"
+        >
+          Back to Notebooks
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`max-w-xl mx-auto rounded-2xl shadow-xl border overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300 ${
+      isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+    }`}>
+      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 flex justify-between items-center">
+        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+          <MessageSquare size={20} /> Contact Us
+        </h2>
+        <button onClick={onCancel} className="text-indigo-100 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors">
+          <X size={20} />
+        </button>
+      </div>
+
+      <form onSubmit={handleSubmit} className="p-6 space-y-6">
+        <div>
+          <label className={labelClass}>Name <span className="text-red-500">*</span></label>
+          <input required type="text" placeholder="Your name" className={inputClass}
+            value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+        </div>
+        <div>
+          <label className={labelClass}>Email <span className="text-red-500">*</span></label>
+          <input required type="email" placeholder="you@example.com" className={inputClass}
+            value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
+        </div>
+        <div>
+          <label className={labelClass}>Message <span className="text-red-500">*</span></label>
+          <textarea required rows={5} placeholder="How can we help?" className={`${inputClass} resize-none`}
+            value={formData.message} onChange={e => setFormData({...formData, message: e.target.value})} />
+        </div>
+
+        <div className={`p-4 rounded-lg border flex items-center gap-4 ${
+          isDark ? 'bg-blue-900/20 border-blue-900/30' : 'bg-blue-50 border-blue-100'
+        }`}>
+          <div className={`p-2 rounded-full shadow-sm ${isDark ? 'bg-slate-800 text-blue-400' : 'bg-white text-blue-600'}`}>
+            <ShieldCheck size={24} />
+          </div>
+          <div className="flex-1">
+            <label className={labelClass}>
+              Security Check: What is {captcha.num1} + {captcha.num2}? <span className="text-red-500">*</span>
+            </label>
+            <input required type="number" placeholder="?" 
+              className={`w-32 px-4 py-2 rounded-lg border focus:ring-2 transition-all outline-none ${
+                errors.captcha ? 'border-red-500 focus:ring-red-500' : 'border-slate-300 focus:ring-blue-500'
+              } ${isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white'}`}
+              value={captchaAnswer}
+              onChange={e => {
+                setCaptchaAnswer(e.target.value);
+                if (errors.captcha) setErrors({...errors, captcha: null});
+              }}
+            />
+            {errors.captcha && <p className="text-xs text-red-500 mt-1 font-medium">{errors.captcha}</p>}
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+           <button type="submit" disabled={isSubmitting}
+            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 px-4 rounded-lg transition-colors flex justify-center items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">
+            {isSubmitting ? <><Loader2 className="animate-spin" size={18} /> Sending...</> : 'Send Message'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+const SubmitForm = ({ onCancel, onSubmit, isSubmitting, isDark }) => {
+  const [formData, setFormData] = useState({
+    notebookId: '', 
+    title: '',
+    description: '',
+    mainCategory: '',
+    subCategory: '',
+    owner: '',
+    organization: '', 
+    email: '',
+    reviewerNote: '' // Added for Reviewer Note
+  });
+
+  const [captcha, setCaptcha] = useState({ 
+    num1: Math.floor(Math.random() * 10) + 1, 
+    num2: Math.floor(Math.random() * 10) + 1 
+  });
+  const [captchaAnswer, setCaptchaAnswer] = useState('');
+  
+  const [availableSubCategories, setAvailableSubCategories] = useState([]);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  // Dynamic Styles
+  const inputClass = `w-full px-4 py-2 rounded-lg border focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none ${
+    isDark 
+      ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' 
+      : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400'
+  }`;
+  
+  const labelClass = `block text-sm font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`;
+  const selectClass = `${inputClass} appearance-none`;
+
+  const handleMainCategoryChange = (e) => {
+    const category = e.target.value;
+    setFormData(prev => ({ 
+      ...prev, 
+      mainCategory: category, 
+      subCategory: '' 
+    }));
+    setAvailableSubCategories(category ? CATEGORY_DATA[category] : []);
+  };
+
+  const validateForm = () => {
+    const newErrors = {};
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const cleanId = formData.notebookId.trim();
+    if (!cleanId) {
+      newErrors.notebookId = "Notebook ID is required.";
+    } else if (!uuidRegex.test(cleanId)) {
+      newErrors.notebookId = "Invalid format. Must be a valid UUID.";
+    }
+    if (parseInt(captchaAnswer) !== captcha.num1 + captcha.num2) {
+      newErrors.captcha = "Incorrect answer. Please try again.";
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handlePreSubmit = (e) => {
+    e.preventDefault();
+    if (validateForm()) setShowConfirmation(true);
+  };
+
+  const handleConfirmSubmit = async () => {
+    setShowConfirmation(false);
+    const success = await onSubmit(formData);
+    if (success) setIsSuccess(true);
+  };
+
+  if (isSuccess) {
+    return (
+      <div className={`max-w-2xl mx-auto rounded-2xl shadow-xl border overflow-hidden animate-in fade-in zoom-in duration-300 p-12 text-center ${
+        isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+      }`}>
+        <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${
+          isDark ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-600'
+        }`}>
+          <CheckCircle size={40} />
+        </div>
+        <h2 className={`text-2xl font-bold mb-4 ${isDark ? 'text-white' : 'text-slate-800'}`}>Submission Received!</h2>
+        <p className={`text-lg mb-8 max-w-md mx-auto ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+          Thank you for contributing. Your notebook has been marked as <strong>"To Be Reviewed"</strong> and will appear on the website once approved.
+        </p>
+        <button
+          onClick={onCancel}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors"
+        >
+          Return to Browse
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`max-w-2xl mx-auto rounded-2xl shadow-xl border overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300 relative ${
+      isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+    }`}>
+      
+      {/* Confirmation Overlay */}
+      {showConfirmation && (
+        <div className="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+           <div className={`rounded-xl shadow-xl w-full max-w-sm p-6 animate-in zoom-in-95 duration-200 ${
+             isDark ? 'bg-slate-800 text-white border border-slate-700' : 'bg-white text-slate-900'
+           }`}>
+             <div className="flex flex-col items-center text-center">
+               <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-4 ${
+                 isDark ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-50 text-blue-600'
+               }`}>
+                 <AlertCircle size={28} />
+               </div>
+               <h3 className="text-xl font-bold mb-2">Confirm Submission</h3>
+               <p className={`mb-6 text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                 Are you sure you want to submit this notebook? It will be sent to the review queue before appearing publicly.
+               </p>
+               <div className="flex gap-3 w-full">
+                 <button
+                   type="button"
+                   onClick={() => setShowConfirmation(false)}
+                   className={`flex-1 px-4 py-2 border font-semibold rounded-lg transition-colors ${
+                     isDark ? 'border-slate-600 hover:bg-slate-700 text-slate-300' : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                   }`}
+                 >
+                   Cancel
+                 </button>
+                 <button
+                   type="button"
+                   onClick={handleConfirmSubmit}
+                   className="flex-1 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+                 >
+                   Yes, Submit
+                 </button>
+               </div>
+             </div>
+           </div>
+        </div>
+      )}
+
+      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 flex justify-between items-center">
+        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+          <Send size={20} /> Submit a NotebookLM
+        </h2>
+        <button onClick={onCancel} className="text-blue-100 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors">
+          <X size={20} />
+        </button>
+      </div>
+      
+      <form onSubmit={handlePreSubmit} className="p-6 space-y-6">
+        <div>
+          <label className={labelClass}>
+            Notebook GUID <span className="text-red-500">*</span>
+          </label>
+          <div className={`flex rounded-lg shadow-sm ${errors.notebookId ? 'ring-2 ring-red-500' : ''}`}>
+            <span className={`px-4 py-2 border border-r-0 rounded-l-lg text-sm flex items-center select-none ${
+              isDark ? 'bg-slate-900 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-300 text-slate-500'
+            }`}>
+              ...ook/
+            </span>
+            <input
+              required
+              type="text"
+              placeholder="e2921591-9a2c-..."
+              className={`flex-1 min-w-0 block w-full px-4 py-2 rounded-none rounded-r-lg border focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none ${
+                isDark ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-slate-300'
+              }`}
+              value={formData.notebookId}
+              onChange={e => {
+                setFormData({...formData, notebookId: e.target.value});
+                if (errors.notebookId) setErrors({...errors, notebookId: null});
+              }}
+            />
+          </div>
+          {errors.notebookId ? (
+            <p className="text-xs text-red-500 mt-1 font-medium">{errors.notebookId}</p>
+          ) : (
+            <p className="text-xs text-slate-400 mt-1">Copy the ID from the end of your NotebookLM URL.</p>
+          )}
+        </div>
+
+        <div>
+          <label className={labelClass}>Title <span className="text-red-500">*</span></label>
+          <input required type="text" placeholder="e.g., Creative Writing Prompts" className={inputClass}
+            value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})}
+          />
+        </div>
+
+        <div>
+          <label className={labelClass}>Description</label>
+          <textarea required rows={4} placeholder="A brief summary..." className={`${inputClass} resize-none`}
+            value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Main Category <span className="text-red-500">*</span></label>
+            <div className="relative">
+              <select required className={selectClass} value={formData.mainCategory} onChange={handleMainCategoryChange}>
+                <option value="">Select a Category</option>
+                {MAIN_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+              <ChevronDown className="absolute right-3 top-3 text-slate-400 pointer-events-none" size={16} />
+            </div>
+          </div>
+          <div>
+            <label className={labelClass}>Subcategory <span className="text-red-500">*</span></label>
+            <div className="relative">
+              <select required disabled={!formData.mainCategory} className={`${selectClass} disabled:opacity-50`}
+                value={formData.subCategory} onChange={e => setFormData({...formData, subCategory: e.target.value})}>
+                <option value="">{formData.mainCategory ? 'Select Subcategory' : 'Select Main Category first'}</option>
+                {availableSubCategories.map(sub => <option key={sub} value={sub}>{sub}</option>)}
+              </select>
+              <ChevronDown className="absolute right-3 top-3 text-slate-400 pointer-events-none" size={16} />
+            </div>
+          </div>
+        </div>
+
+        <div className={`p-4 rounded-lg border space-y-4 ${
+          isDark ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'
+        }`}>
+          <h3 className={`font-semibold flex items-center gap-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+            <User size={16} /> Owner Details
+          </h3>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Name / Handle</label>
+            <input type="text" placeholder="e.g. John Doe" className={inputClass}
+              value={formData.owner} onChange={e => setFormData({...formData, owner: e.target.value})} />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Organization</label>
+              <div className="relative">
+                <input type="text" placeholder="e.g. University of X" className={`${inputClass} pl-9`}
+                  value={formData.organization} onChange={e => setFormData({...formData, organization: e.target.value})} />
+                <Building className="absolute left-3 top-2.5 text-slate-400" size={16} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Email</label>
+              <div className="relative">
+                <input type="email" placeholder="john@example.com" className={`${inputClass} pl-9`}
+                  value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
+                <Mail className="absolute left-3 top-2.5 text-slate-400" size={16} />
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Note to Reviewer Section */}
+        <div className={`p-4 rounded-lg border space-y-2 ${
+          isDark ? 'bg-amber-900/10 border-amber-900/30' : 'bg-amber-50 border-amber-100'
+        }`}>
+          <h3 className={`font-semibold flex items-center gap-2 ${isDark ? 'text-amber-500' : 'text-amber-700'}`}>
+            <FileText size={16} /> Note to Reviewer (Optional)
+          </h3>
+          <textarea 
+            rows={2} 
+            placeholder="Any context for the admin checking this link..." 
+            className={`${inputClass} resize-none`}
+            value={formData.reviewerNote} 
+            onChange={e => setFormData({...formData, reviewerNote: e.target.value})}
+          />
+        </div>
+
+        <div className={`p-4 rounded-lg border flex items-center gap-4 ${
+          isDark ? 'bg-blue-900/20 border-blue-900/30' : 'bg-blue-50 border-blue-100'
+        }`}>
+          <div className={`p-2 rounded-full shadow-sm ${isDark ? 'bg-slate-800 text-blue-400' : 'bg-white text-blue-600'}`}>
+            <ShieldCheck size={24} />
+          </div>
+          <div className="flex-1">
+            <label className={labelClass}>
+              Security Check: What is {captcha.num1} + {captcha.num2}? <span className="text-red-500">*</span>
+            </label>
+            <input required type="number" placeholder="?" 
+              className={`w-32 px-4 py-2 rounded-lg border focus:ring-2 transition-all outline-none ${
+                errors.captcha ? 'border-red-500 focus:ring-red-500' : 'border-slate-300 focus:ring-blue-500'
+              } ${isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white'}`}
+              value={captchaAnswer}
+              onChange={e => {
+                setCaptchaAnswer(e.target.value);
+                if (errors.captcha) setErrors({...errors, captcha: null});
+              }}
+            />
+            {errors.captcha && <p className="text-xs text-red-500 mt-1 font-medium">{errors.captcha}</p>}
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <button type="submit" disabled={isSubmitting}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-lg transition-colors flex justify-center items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">
+            {isSubmitting ? <><Loader2 className="animate-spin" size={18} /> Submitting...</> : 'Submit for Review'}
+          </button>
+          <button type="button" onClick={() => setFormData({ notebookId: '', title: '', description: '', mainCategory: '', subCategory: '', owner: '', organization: '', email: '', reviewerNote: '' })}
+            className={`flex-1 border font-semibold py-2.5 px-4 rounded-lg transition-colors ${
+              isDark ? 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}>
+            Clear Form
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [notebooks, setNotebooks] = useState([]);
+  const [view, setView] = useState('browse'); // 'browse' | 'submit' | 'contact'
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDark, setIsDark] = useState(false); // Theme State
+  
+  // Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedMainCategory, setSelectedMainCategory] = useState('All');
+  const [ownerFilter, setOwnerFilter] = useState('');
+  const [orgFilter, setOrgFilter] = useState('');
+
+  // --- Auth & Data Fetching ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth failed:", error);
+      }
+    };
+    initAuth();
+    
+    const unsubscribeAuth = onAuthStateChanged(auth, setUser);
+    return () => unsubscribeAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const notebooksRef = collection(db, 'artifacts', appId, 'public', 'data', 'notebooks');
+    const q = query(notebooksRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setNotebooks(docs);
+    }, (error) => console.error("Firestore error:", error));
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleSubmitNotebook = async (formData) => {
+    if (!user) return;
+    setIsSubmitting(true);
+    try {
+      const notebooksRef = collection(db, 'artifacts', appId, 'public', 'data', 'notebooks');
+      const fullUrl = `https://notebooklm.google.com/notebook/${formData.notebookId}`;
+      await addDoc(notebooksRef, {
+        ...formData,
+        url: fullUrl,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+        userId: user.uid
+      });
+      return true;
+    } catch (error) {
+      console.error("Error adding document: ", error);
+      return false;
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleContactSubmit = async (formData) => {
+    if (!user) return;
+    try {
+      const messagesRef = collection(db, 'artifacts', appId, 'public', 'data', 'messages');
+      await addDoc(messagesRef, {
+        ...formData,
+        createdAt: serverTimestamp(),
+        userId: user.uid
+      });
+    } catch (error) {
+      console.error("Error sending message: ", error);
+    }
+  };
+
+  const filteredNotebooks = useMemo(() => {
+    return notebooks.filter(nb => {
+      if (nb.status === 'pending') return false;
+      const query = searchQuery.toLowerCase();
+      const matchesSearch = 
+        nb.title.toLowerCase().includes(query) ||
+        nb.description.toLowerCase().includes(query) ||
+        (nb.owner && nb.owner.toLowerCase().includes(query)) ||
+        (nb.organization && nb.organization.toLowerCase().includes(query)) ||
+        (nb.email && nb.email.toLowerCase().includes(query));
+      const matchesCategory = selectedMainCategory === 'All' || nb.mainCategory === selectedMainCategory;
+      const matchesOwner = !ownerFilter || (nb.owner && nb.owner.toLowerCase().includes(ownerFilter.toLowerCase()));
+      const matchesOrg = !orgFilter || (nb.organization && nb.organization.toLowerCase().includes(orgFilter.toLowerCase()));
+      return matchesSearch && matchesCategory && matchesOwner && matchesOrg;
+    });
+  }, [notebooks, searchQuery, selectedMainCategory, ownerFilter, orgFilter]);
+
+  // Common styles based on theme
+  const bgClass = isDark ? 'bg-slate-900' : 'bg-slate-50';
+  const textClass = isDark ? 'text-slate-100' : 'text-slate-900';
+  const cardBgClass = isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200';
+  const inputBgClass = isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200';
+
+  return (
+    <div className={`min-h-screen font-sans transition-colors duration-200 ${bgClass} ${textClass}`}>
+      {/* --- Navbar --- */}
+      <nav className={`sticky top-0 z-20 border-b transition-colors duration-200 ${
+        isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+      }`}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('browse')}>
+              <div className="bg-gradient-to-tr from-blue-600 to-indigo-500 text-white p-2 rounded-lg">
+                <BookOpen size={24} />
+              </div>
+              <span className={`text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r ${
+                isDark ? 'from-blue-400 to-indigo-400' : 'from-blue-700 to-indigo-700'
+              }`}>
+                NotebookDB
+              </span>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setIsDark(!isDark)}
+                className={`p-2 rounded-full transition-colors ${
+                  isDark ? 'bg-slate-700 text-yellow-400 hover:bg-slate-600' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+                title="Toggle Theme"
+              >
+                {isDark ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
+
+              {view === 'browse' && (
+                 <button 
+                  onClick={() => setView('submit')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full font-medium transition-all shadow-sm hover:shadow-md flex items-center gap-2 text-sm sm:text-base"
+                >
+                  <Plus size={18} />
+                  <span className="hidden sm:inline">Add Notebook</span>
+                  <span className="sm:hidden">Add</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* --- Main Content --- */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {view === 'submit' ? (
+          <SubmitForm 
+            onCancel={() => setView('browse')} 
+            onSubmit={handleSubmitNotebook}
+            isSubmitting={isSubmitting}
+            isDark={isDark}
+          />
+        ) : view === 'contact' ? (
+          <ContactForm 
+            onCancel={() => setView('browse')}
+            isDark={isDark}
+            onSubmit={handleContactSubmit}
+          />
+        ) : (
+          <div className="flex flex-col lg:flex-row gap-8">
+            
+            {/* Sidebar Filters */}
+            <aside className="w-full lg:w-64 flex-shrink-0 space-y-6">
+              {/* Search Mobile/Desktop */}
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search all text..."
+                  className={`w-full pl-10 pr-4 py-2.5 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all ${
+                    isDark ? 'bg-slate-800 border border-slate-700 text-white placeholder-slate-500' : 'bg-white border border-slate-200'
+                  }`}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                <Search className={`absolute left-3 top-3 ${isDark ? 'text-slate-500' : 'text-slate-400'}`} size={18} />
+              </div>
+
+              {/* Owner & Org Filters */}
+              <div className={`p-4 rounded-xl border shadow-sm space-y-3 ${cardBgClass}`}>
+                <div className={`flex items-center gap-2 mb-2 font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                  <User size={18} /> Owner Details
+                </div>
+                
+                <div className="relative">
+                  <input type="text" placeholder="Filter by Name..." value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}
+                    className={`w-full pl-8 pr-3 py-2 border rounded-md text-sm focus:ring-1 focus:ring-blue-500 outline-none ${
+                      isDark ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-slate-50 border-slate-200'
+                    }`}
+                  />
+                  <User className="absolute left-2.5 top-2.5 text-slate-400" size={14} />
+                  {ownerFilter && <button onClick={() => setOwnerFilter('')} className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"><X size={14} /></button>}
+                </div>
+
+                <div className="relative">
+                  <input type="text" placeholder="Filter by Org..." value={orgFilter} onChange={(e) => setOrgFilter(e.target.value)}
+                    className={`w-full pl-8 pr-3 py-2 border rounded-md text-sm focus:ring-1 focus:ring-blue-500 outline-none ${
+                      isDark ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-slate-50 border-slate-200'
+                    }`}
+                  />
+                  <Building className="absolute left-2.5 top-2.5 text-slate-400" size={14} />
+                  {orgFilter && <button onClick={() => setOrgFilter('')} className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"><X size={14} /></button>}
+                </div>
+              </div>
+
+              {/* Categories */}
+              <div className={`p-4 rounded-xl border shadow-sm ${cardBgClass}`}>
+                <div className={`flex items-center gap-2 mb-4 font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                  <Filter size={18} /> Categories
+                </div>
+                <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-visible pb-2 lg:pb-0">
+                  <button onClick={() => setSelectedMainCategory('All')}
+                    className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                      selectedMainCategory === 'All'
+                        ? (isDark ? 'bg-blue-900/30 text-blue-300' : 'bg-blue-50 text-blue-700')
+                        : (isDark ? 'text-slate-400 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-50')
+                    }`}>
+                    All Categories
+                  </button>
+                  {MAIN_CATEGORIES.map(cat => (
+                    <button key={cat} onClick={() => setSelectedMainCategory(cat)}
+                      className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                        selectedMainCategory === cat
+                          ? (isDark ? 'bg-blue-900/30 text-blue-300' : 'bg-blue-50 text-blue-700')
+                          : (isDark ? 'text-slate-400 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-50')
+                      }`}>
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Stats/Info - Modified */}
+              <div className={`p-4 rounded-xl border flex flex-col gap-3 ${
+                isDark ? 'bg-indigo-900/20 border-indigo-900/40' : 'bg-indigo-50 border-indigo-100'
+              }`}>
+                <div>
+                  <h4 className={`font-semibold mb-2 text-sm ${isDark ? 'text-indigo-300' : 'text-indigo-900'}`}>About NotebookDB</h4>
+                  <p className={`text-xs leading-relaxed ${isDark ? 'text-indigo-200' : 'text-indigo-700'}`}>
+                    A collection of Google NotebookLM links. Share your best notebooks and discover others.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setView('contact')}
+                  className={`text-xs font-semibold underline underline-offset-2 ${
+                    isDark ? 'text-indigo-400 hover:text-indigo-300' : 'text-indigo-600 hover:text-indigo-800'
+                  }`}
+                >
+                  Contact Me
+                </button>
+              </div>
+            </aside>
+
+            {/* Grid Results */}
+            <div className="flex-1">
+              <div className="flex justify-between items-end mb-6">
+                <h2 className={`text-2xl font-bold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                  {selectedMainCategory === 'All' ? 'All Notebooks' : selectedMainCategory}
+                </h2>
+                <span className={`text-sm font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  {filteredNotebooks.length} {filteredNotebooks.length === 1 ? 'result' : 'results'}
+                </span>
+              </div>
+
+              {filteredNotebooks.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredNotebooks.map(notebook => (
+                    <NotebookCard key={notebook.id} notebook={notebook} isDark={isDark} />
+                  ))}
+                </div>
+              ) : (
+                <div className={`text-center py-20 rounded-2xl border border-dashed ${
+                  isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+                }`}>
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${
+                    isDark ? 'bg-slate-900' : 'bg-slate-50'
+                  }`}>
+                    <BookOpen className="text-slate-400" size={32} />
+                  </div>
+                  <h3 className={`text-lg font-semibold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>No notebooks found</h3>
+                  <p className={`max-w-xs mx-auto mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    We couldn't find any notebooks matching your search filters.
+                  </p>
+                  <button 
+                    onClick={() => {
+                      setSearchQuery(''); 
+                      setSelectedMainCategory('All');
+                      setOwnerFilter('');
+                      setOrgFilter('');
+                    }}
+                    className="text-blue-500 font-medium hover:text-blue-400 text-sm"
+                  >
+                    Clear all filters
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
